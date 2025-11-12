@@ -1,7 +1,11 @@
 # DDNS Cloudflare Bash Script
 
-[![contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg?style=flat)](https://github.com/fire1ce/3os.org/tree/master/src)
 [![MIT license](https://img.shields.io/badge/License-MIT-blue.svg)](https://mit-license.org/)
+
+## This is a fork version
+
+- Forked from [fire1ce/DDNS-Cloudflare-Bash](https://github.com/fire1ce/DDNS-Cloudflare-Bash)
+- `proxied` is now comma-separated values that correspond to each `dns_record` entry.
 
 ## About
 

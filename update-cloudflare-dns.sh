@@ -33,11 +33,18 @@ if [ "${ttl}" -lt 120 ] || [ "${ttl}" -gt 7200 ] && [ "${ttl}" -ne 1 ]; then
   exit
 fi
 
-### Check validity of "proxied" parameter
-if [ "${proxied}" != "false" ] && [ "${proxied}" != "true" ]; then
-  echo 'Error! Incorrect "proxied" parameter, choose "true" or "false"'
-  exit 0
-fi
+### Build comma separated array from proxied parameter
+IFS=',' read -d '' -ra proxied_values <<<"$proxied,"
+unset 'proxied_values[${#proxied_values[@]}-1]'
+declare proxied_values
+
+### Check validity of "proxied" parameter values
+for proxy_val in "${proxied_values[@]}"; do
+  if [ "${proxy_val}" != "false" ] && [ "${proxy_val}" != "true" ]; then
+    echo 'Error! Incorrect "proxied" parameter value: "'${proxy_val}'", choose "true" or "false"'
+    exit 0
+  fi
+done
 
 ### Check validity of "what_ip" parameter
 if [ "${what_ip}" != "external" ] && [ "${what_ip}" != "internal" ]; then
@@ -45,11 +52,24 @@ if [ "${what_ip}" != "external" ] && [ "${what_ip}" != "internal" ]; then
   exit 0
 fi
 
-### Check if set to internal ip and proxy
-if [ "${what_ip}" == "internal" ] && [ "${proxied}" == "true" ]; then
-  echo 'Error! Internal IP cannot be proxied'
+### Build comma separated array from dns_record parameter to update multiple A records
+IFS=',' read -d '' -ra dns_records <<<"$dns_record,"
+unset 'dns_records[${#dns_records[@]}-1]'
+declare dns_records
+
+### Check that the number of proxied values matches the number of DNS records
+if [ ${#dns_records[@]} -ne ${#proxied_values[@]} ]; then
+  echo "Error! Number of DNS records (${#dns_records[@]}) does not match number of proxied values (${#proxied_values[@]})"
   exit 0
 fi
+
+### Check if set to internal ip and proxy for any record
+for proxy_val in "${proxied_values[@]}"; do
+  if [ "${what_ip}" == "internal" ] && [ "${proxy_val}" == "true" ]; then
+    echo 'Error! Internal IP cannot be proxied'
+    exit 0
+  fi
+done
 
 ### Valid IPv4 Regex
 REIP='^((25[0-5]|(2[0-4]|1[0-9]|[1-9]|)[0-9])\.){3}(25[0-5]|(2[0-4]|1[0-9]|[1-9]|)[0-9])$'
@@ -88,14 +108,12 @@ if [ "${what_ip}" == "internal" ]; then
   echo "==> Internal ${interface} IP is: $ip"
 fi
 
-### Build coma separated array fron dns_record parameter to update multiple A records
-IFS=',' read -d '' -ra dns_records <<<"$dns_record,"
-unset 'dns_records[${#dns_records[@]}-1]'
-declare dns_records
-
-for record in "${dns_records[@]}"; do
+for i in "${!dns_records[@]}"; do
+  record="${dns_records[$i]}"
+  current_proxied="${proxied_values[$i]}"
+  
   ### Get IP address of DNS record from 1.1.1.1 DNS server when proxied is "false"
-  if [ "${proxied}" == "false" ]; then
+  if [ "${current_proxied}" == "false" ]; then
     ### Check if "nslookup" command is present
     if which nslookup >/dev/null; then
       dns_record_ip=$(nslookup ${record} 1.1.1.1 | awk '/Address/ { print $2 }' | sed -n '2p')
@@ -108,11 +126,11 @@ for record in "${dns_records[@]}"; do
       echo "Error! Can't resolve the ${record} via 1.1.1.1 DNS server"
       exit 0
     fi
-    is_proxed="${proxied}"
+    is_proxed="${current_proxied}"
   fi
 
   ### Get the dns record id and current proxy status from Cloudflare API when proxied is "true"
-  if [ "${proxied}" == "true" ]; then
+  if [ "${current_proxied}" == "true" ]; then
     dns_record_info=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$zoneid/dns_records?type=A&name=$record" \
       -H "Authorization: Bearer $cloudflare_zone_api_token" \
       -H "Content-Type: application/json")
@@ -126,7 +144,7 @@ for record in "${dns_records[@]}"; do
   fi
 
   ### Check if ip or proxy have changed
-  if [ ${dns_record_ip} == ${ip} ] && [ ${is_proxed} == ${proxied} ]; then
+  if [ ${dns_record_ip} == ${ip} ] && [ ${is_proxed} == ${current_proxied} ]; then
     echo "==> DNS record IP of ${record} is ${dns_record_ip}", no changes needed.
     continue
   fi
@@ -150,7 +168,7 @@ for record in "${dns_records[@]}"; do
   update_dns_record=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$zoneid/dns_records/$cloudflare_dns_record_id" \
     -H "Authorization: Bearer $cloudflare_zone_api_token" \
     -H "Content-Type: application/json" \
-    --data "{\"type\":\"A\",\"name\":\"$record\",\"content\":\"$ip\",\"ttl\":$ttl,\"proxied\":$proxied}")
+    --data "{\"type\":\"A\",\"name\":\"$record\",\"content\":\"$ip\",\"ttl\":$ttl,\"proxied\":$current_proxied}")
   if [[ ${update_dns_record} == *"\"success\":false"* ]]; then
     echo ${update_dns_record}
     echo "Error! Update failed"
@@ -158,7 +176,7 @@ for record in "${dns_records[@]}"; do
   fi
 
   echo "==> Success!"
-  echo "==> $record DNS Record updated to: $ip, ttl: $ttl, proxied: $proxied"
+  echo "==> $record DNS Record updated to: $ip, ttl: $ttl, proxied: $current_proxied"
 
   ### Telegram notification
   if [ ${notify_me_telegram} == "no" ]; then
