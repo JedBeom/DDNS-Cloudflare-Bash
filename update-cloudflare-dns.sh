@@ -144,34 +144,59 @@ for i in "${!dns_records[@]}"; do
   fi
 
   ### Check if ip or proxy have changed
-  if [ ${dns_record_ip} == ${ip} ] && [ ${is_proxed} == ${current_proxied} ]; then
-    echo "==> DNS record IP of ${record} is ${dns_record_ip}", no changes needed.
+  if [[ $dns_record_ip == $ip ]] && [[ $is_proxed == $current_proxied ]]; then
+    echo "==> DNS record IP of ${record} is ${dns_record_ip}, no changes needed."
     continue
   fi
 
   echo "==> DNS record of ${record} is: ${dns_record_ip}. Trying to update..."
 
-  ### Get the dns record information from Cloudflare API
-  cloudflare_record_info=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$zoneid/dns_records?type=A&name=$record" \
-    -H "Authorization: Bearer $cloudflare_zone_api_token" \
-    -H "Content-Type: application/json")
-  if [[ ${cloudflare_record_info} == *"\"success\":false"* ]]; then
-    echo ${cloudflare_record_info}
-    echo "Error! Can't get ${record} record information from Cloudflare API"
-    exit 0
+  ### Check if dns_record_ip is empty (record doesn't exist)
+  if [ -z "$dns_record_ip" ]; then
+    echo "==> DNS record ${record} does not exist. Creating new record..."
+    
+    ### Create new DNS record via POST
+    create_dns_record=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$zoneid/dns_records" \
+      -H "Authorization: Bearer $cloudflare_zone_api_token" \
+      -H "Content-Type: application/json" \
+      --data "{\"type\":\"A\",\"name\":\"$record\",\"content\":\"$ip\",\"ttl\":$ttl,\"proxied\":$current_proxied}")
+    
+    if [[ ${create_dns_record} == *"\"success\":false"* ]]; then
+      echo ${create_dns_record}
+      echo "Error! DNS record creation failed"
+      exit 0
+    fi
+    
+    echo "==> Success! DNS record ${record} created with IP: $ip, ttl: $ttl, proxied: $current_proxied"
+  else
+    ### Get the dns record information from Cloudflare API
+    cloudflare_record_info=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$zoneid/dns_records?type=A&name=$record" \
+      -H "Authorization: Bearer $cloudflare_zone_api_token" \
+      -H "Content-Type: application/json")
+    if [[ ${cloudflare_record_info} == *"\"success\":false"* ]]; then
+      echo ${cloudflare_record_info}
+      echo "Error! Can't get ${record} record information from Cloudflare API"
+      exit 0
+    fi
+
+    ### Get the dns record id from response
+    cloudflare_dns_record_id=$(echo ${cloudflare_record_info} | grep -o '"id":"[^"]*' | cut -d'"' -f4)
+
+    ### Push new dns record information to Cloudflare API
+    update_dns_record=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$zoneid/dns_records/$cloudflare_dns_record_id" \
+      -H "Authorization: Bearer $cloudflare_zone_api_token" \
+      -H "Content-Type: application/json" \
+      --data "{\"type\":\"A\",\"name\":\"$record\",\"content\":\"$ip\",\"ttl\":$ttl,\"proxied\":$current_proxied}")
+    if [[ ${update_dns_record} == *"\"success\":false"* ]]; then
+      echo ${update_dns_record}
+      echo "Error! Update failed"
+      exit 0
+    fi
+    
+    echo "==> Success! DNS record ${record} updated to: $ip, ttl: $ttl, proxied: $current_proxied"
   fi
-
-  ### Get the dns record id from response
-  cloudflare_dns_record_id=$(echo ${cloudflare_record_info} | grep -o '"id":"[^"]*' | cut -d'"' -f4)
-
-  ### Push new dns record information to Cloudflare API
-  update_dns_record=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$zoneid/dns_records/$cloudflare_dns_record_id" \
-    -H "Authorization: Bearer $cloudflare_zone_api_token" \
-    -H "Content-Type: application/json" \
-    --data "{\"type\":\"A\",\"name\":\"$record\",\"content\":\"$ip\",\"ttl\":$ttl,\"proxied\":$current_proxied}")
-  if [[ ${update_dns_record} == *"\"success\":false"* ]]; then
-    echo ${update_dns_record}
-    echo "Error! Update failed"
+  
+  continue
     exit 0
   fi
 
